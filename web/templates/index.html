@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect 4 - Web Game</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Connect 4</h1>
+            <div class="game-controls">
+                <button id="new-game-btn" class="btn btn-primary">New Game</button>
+                <button id="reset-btn" class="btn btn-secondary">Reset</button>
+                <button id="settings-btn" class="btn btn-secondary">Settings</button>
+            </div>
+        </header>
+
+        <!-- Game Settings Modal -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Game Settings</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <label for="game-mode">Game Mode:</label>
+                        <select id="game-mode">
+                            <option value="friend">Play with Friend</option>
+                            <option value="computer">Play against Computer</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="board-rows">Board Rows:</label>
+                        <input type="number" id="board-rows" min="3" max="100" value="7">
+                        <span class="range-display">(3-100)</span>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="board-cols">Board Columns:</label>
+                        <input type="number" id="board-cols" min="3" max="100" value="7">
+                        <span class="range-display">(3-100)</span>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="connect-length">Connect Length:</label>
+                        <input type="number" id="connect-length" min="3" max="50" value="4">
+                        <span class="range-display">(3-50)</span>
+                    </div>
+                    
+                    <div class="modal-footer">
+                        <button id="apply-settings" class="btn btn-primary">Start New Game</button>
+                        <button id="cancel-settings" class="btn btn-secondary">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Info Panel -->
+        <div class="game-info">
+            <div class="game-status">
+                <div id="current-player" class="player-indicator">
+                    Player 1's Turn
+                </div>
+                <div id="game-mode-display" class="game-mode">
+                    Playing with Friend
+                </div>
+            </div>
+            
+            <div class="game-stats">
+                <div class="stat">
+                    <span class="stat-label">Board:</span>
+                    <span id="board-size">7×7</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Connect:</span>
+                    <span id="connect-display">4</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Board Container -->
+        <div class="game-board-container">
+            <div id="game-board" class="game-board">
+                <!-- Board will be generated dynamically -->
+            </div>
+        </div>
+
+        <!-- Winner Announcement -->
+        <div id="winner-modal" class="modal winner-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="winner-title">Game Over!</h2>
+                </div>
+                <div class="modal-body">
+                    <div id="winner-message" class="winner-message">
+                        Player 1 Wins!
+                    </div>
+                    <div class="modal-footer">
+                        <button id="play-again" class="btn btn-primary">Play Again</button>
+                        <button id="new-game-winner" class="btn btn-secondary">New Game</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <div>Making move...</div>
+        </div>
+
+        <!-- Error Messages -->
+        <div id="error-message" class="error-message hidden">
+            <span id="error-text"></span>
+            <button id="close-error" class="close-error">&times;</button>
+        </div>
+    </div>
+
+    <footer>
+        <p>Connect 4 Web Game - Click on columns to drop pieces</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
