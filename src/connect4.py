@@ -8,7 +8,7 @@ Players take turns dropping pieces into columns, with the goal of connecting
 
 from typing import List, Tuple, Optional, Literal
 from enum import Enum
-
+import numpy as np
 
 class Player(Enum):
     """Enumeration for players in the game."""
@@ -42,6 +42,10 @@ class Connect4:
         game_state (GameState): Current state of the game
     """
     
+    MAX_COLS = 30
+    MAX_ROWS = 30
+
+    
     def __init__(self, rows: int = 6, cols: int = 7, connect_length: int = 4):
         """
         Initialize a new Connect-4 game.
@@ -60,14 +64,43 @@ class Connect4:
             raise ValueError("Connect length must be at least 1")
         if connect_length > max(rows, cols):
             raise ValueError("Connect length cannot exceed board dimensions")
-            
+        if rows > self.MAX_ROWS or cols > self.MAX_COLS:
+            raise ValueError(f"Board dimensions cannot exceed {self.MAX_ROWS}x{self.MAX_COLS}")
+        
         self.rows = rows
         self.cols = cols
         self.connect_length = connect_length
-        self.board = [[0 for _ in range(cols)] for _ in range(rows)]
+        self.board = np.zeros((rows, cols), dtype=int)
         self.current_player = Player.ONE
         self.game_state = GameState.IN_PROGRESS
+        self._nn_state = np.zeros((5, self.MAX_ROWS, self.MAX_COLS), dtype=int)
+        self.row_ofs = (self.MAX_ROWS - self.rows) // 2
+        self.col_ofs = (self.MAX_COLS - self.cols) // 2
+        self.row_ofs_end = self.row_ofs + self.rows
+        self.col_ofs_end = self.col_ofs + self.cols        
+        self._nn_state[4, :, :] = 0  # Valid move layer
+        self._nn_state[4, self.row_ofs: self.row_ofs_end, self.col_ofs:self.col_ofs_end] = 1  # Bottom row valid
+
+    def get_board_state(self) -> List:
+        """
+        Get the current state of the board for training.
         
+        Returns:
+            List of: 
+        """
+        self._nn_state[0,self.row_ofs:self.rows+self.row_ofs,:self.cols] = (self.board == 1).astype(int)
+        self._nn_state[1,self.row_ofs:self.rows+self.row_ofs,:self.cols] = (self.board == 2).astype(int)
+        # find the lowest empty row in each column
+        self._nn_state[2,:,:] = 0
+        for c in range(self.cols):
+            r = self.rows - 1
+            while r >= 0 and self.board[r,c] != 0:
+                r -= 1
+            if r >= 0:
+                self._nn_state[2,self.row_ofs + r,self.col_ofs + c] = 1
+        self._nn_state[3,:,:] = 1 if self.current_player == Player.ONE else -1
+        return self._nn_state
+
     def get_board(self) -> List[List[int]]:
         """
         Get a copy of the current board state.
@@ -75,7 +108,7 @@ class Connect4:
         Returns:
             List[List[int]]: A copy of the board
         """
-        return [row[:] for row in self.board]
+        return self.board.tolist()
     
     def get_valid_moves(self) -> List[int]:
         """
@@ -89,7 +122,7 @@ class Connect4:
         
         valid_moves = []
         for col in range(self.cols):
-            if self.board[0][col] == 0:  # Top row is empty
+            if self.board[0, col] == 0:  # Top row is empty
                 valid_moves.append(col)
         return valid_moves
     
@@ -107,7 +140,7 @@ class Connect4:
             return False
         if col < 0 or col >= self.cols:
             return False
-        return self.board[0][col] == 0
+        return bool(self.board[0, col] == 0)
     
     def make_move(self, col: int) -> bool:
         """
@@ -124,8 +157,8 @@ class Connect4:
         
         # Find the lowest empty row in the column
         for row in range(self.rows - 1, -1, -1):
-            if self.board[row][col] == 0:
-                self.board[row][col] = self.current_player.value
+            if self.board[row, col] == 0:
+                self.board[row, col] = self.current_player.value
                 break
         
         # Check for win or draw
@@ -184,14 +217,14 @@ class Connect4:
             # Check in positive direction
             r, c = row + dr, col + dc
             while (0 <= r < self.rows and 0 <= c < self.cols and 
-                   self.board[r][c] == player_value):
+                   self.board[r, c] == player_value):
                 count += 1
                 r, c = r + dr, c + dc
             
             # Check in negative direction
             r, c = row - dr, col - dc
             while (0 <= r < self.rows and 0 <= c < self.cols and 
-                   self.board[r][c] == player_value):
+                   self.board[r, c] == player_value):
                 count += 1
                 r, c = r - dr, c - dc
             
@@ -224,7 +257,7 @@ class Connect4:
     
     def reset(self) -> None:
         """Reset the game to initial state."""
-        self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
+        self.board = np.zeros((self.rows, self.cols), dtype=int)
         self.current_player = Player.ONE
         self.game_state = GameState.IN_PROGRESS
     
