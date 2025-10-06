@@ -10,6 +10,19 @@ from typing import List, Tuple, Optional, Literal
 from enum import Enum
 import numpy as np
 
+# Try to import Numba for JIT optimization, fall back to regular Python if not available
+try:
+    from numba import jit, types
+    from numba.typed import List as NumbaList
+    NUMBA_AVAILABLE = True
+except ImportError:
+    # Create a dummy decorator that does nothing if Numba is not available
+    def jit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    NUMBA_AVAILABLE = False
+
 class Player(Enum):
     """Enumeration for players in the game."""
     ONE = 1
@@ -22,6 +35,144 @@ class GameState(Enum):
     PLAYER_ONE_WINS = "player_one_wins"
     PLAYER_TWO_WINS = "player_two_wins"
     DRAW = "draw"
+
+
+# JIT-compiled utility functions for performance optimization
+@jit(nopython=True, cache=True)
+def _jit_check_win(board: np.ndarray, row: int, col: int, player_value: int, 
+                   connect_length: int, rows: int, cols: int) -> bool:
+    """
+    JIT-compiled function to check if placing a piece results in a win.
+    
+    Args:
+        board: The game board as numpy array
+        row: Row of the placed piece
+        col: Column of the placed piece
+        player_value: Value representing the current player (1 or 2)
+        connect_length: Number of pieces needed to win
+        rows: Number of rows in the board
+        cols: Number of columns in the board
+        
+    Returns:
+        bool: True if the current player has won, False otherwise
+    """
+    # Check all four directions: horizontal, vertical, diagonal
+    directions = np.array([(0, 1), (1, 0), (1, 1), (1, -1)])
+    
+    for i in range(4):
+        dr, dc = directions[i]
+        count = 1  # Count the piece just placed
+        
+        # Check in positive direction
+        r, c = row + dr, col + dc
+        while (0 <= r < rows and 0 <= c < cols and board[r, c] == player_value):
+            count += 1
+            r, c = r + dr, c + dc
+        
+        # Check in negative direction
+        r, c = row - dr, col - dc
+        while (0 <= r < rows and 0 <= c < cols and board[r, c] == player_value):
+            count += 1
+            r, c = r - dr, c - dc
+        
+        if count >= connect_length:
+            return True
+    
+    return False
+
+
+@jit(nopython=True, cache=True)
+def _jit_get_valid_moves(board: np.ndarray, cols: int) -> np.ndarray:
+    """
+    JIT-compiled function to get all valid column indices where a piece can be dropped.
+    
+    Args:
+        board: The game board as numpy array
+        cols: Number of columns in the board
+        
+    Returns:
+        np.ndarray: Array of valid column indices
+    """
+    valid_moves = []
+    for col in range(cols):
+        if board[0, col] == 0:  # Top row is empty
+            valid_moves.append(col)
+    
+    return np.array(valid_moves)
+
+
+@jit(nopython=True, cache=True)
+def _jit_is_valid_move(board: np.ndarray, col: int, cols: int) -> bool:
+    """
+    JIT-compiled function to check if a move to the specified column is valid.
+    
+    Args:
+        board: The game board as numpy array
+        col: Column index (0-based)
+        cols: Number of columns in the board
+        
+    Returns:
+        bool: True if the move is valid, False otherwise
+    """
+    if col < 0 or col >= cols:
+        return False
+    return board[0, col] == 0
+
+
+@jit(nopython=True, cache=True)
+def _jit_make_move(board: np.ndarray, col: int, player_value: int, rows: int) -> int:
+    """
+    JIT-compiled function to make a move by dropping a piece in the specified column.
+    
+    Args:
+        board: The game board as numpy array
+        col: Column index (0-based)
+        player_value: Value representing the current player (1 or 2)
+        rows: Number of rows in the board
+        
+    Returns:
+        int: Row where the piece was placed, or -1 if move is invalid
+    """
+    # Find the lowest empty row in the column
+    for row in range(rows - 1, -1, -1):
+        if board[row, col] == 0:
+            board[row, col] = player_value
+            return row
+    return -1
+
+
+@jit(nopython=True, cache=True)
+def _jit_update_nn_state(board: np.ndarray, nn_state: np.ndarray, rows: int, cols: int,
+                        row_ofs: int, col_ofs: int, current_player_value: int) -> None:
+    """
+    JIT-compiled function to update the neural network state representation.
+    
+    Args:
+        board: The game board as numpy array
+        nn_state: The neural network state array
+        rows: Number of rows in the board
+        cols: Number of columns in the board
+        row_ofs: Row offset for centering
+        col_ofs: Column offset for centering
+        current_player_value: Current player value (1 or 2)
+    """
+    # Update player 1 and player 2 layers
+    for r in range(rows):
+        for c in range(cols):
+            nn_state[0, row_ofs + r, col_ofs + c] = 1 if board[r, c] == 1 else 0
+            nn_state[1, row_ofs + r, col_ofs + c] = 1 if board[r, c] == 2 else 0
+    
+    # Find the lowest empty row in each column for layer 2
+    nn_state[2, :, :] = 0
+    for c in range(cols):
+        r = rows - 1
+        while r >= 0 and board[r, c] != 0:
+            r -= 1
+        if r >= 0:
+            nn_state[2, row_ofs + r, col_ofs + c] = 1
+    
+    # Set current player layer
+    nn_state[3, :, :] = 1 if current_player_value == 1 else -1
 
 
 class Connect4:
@@ -42,8 +193,8 @@ class Connect4:
         game_state (GameState): Current state of the game
     """
     
-    MAX_COLS = 30
-    MAX_ROWS = 30
+    MAX_COLS = 32
+    MAX_ROWS = 32
 
     
     def __init__(self, rows: int = 6, cols: int = 7, connect_length: int = 4):
@@ -80,25 +231,20 @@ class Connect4:
         self.col_ofs_end = self.col_ofs + self.cols        
         self._nn_state[4, :, :] = 0  # Valid move layer
         self._nn_state[4, self.row_ofs: self.row_ofs_end, self.col_ofs:self.col_ofs_end] = 1  # Bottom row valid
+        
+        # Store JIT availability for performance information
+        self._jit_enabled = NUMBA_AVAILABLE
+        print ("NUMBA JIT Enabled:", self._jit_enabled)
 
     def get_board_state(self) -> List:
         """
         Get the current state of the board for training.
         
         Returns:
-            List of: 
+            numpy array of shape (5, MAX_ROWS, MAX_COLS)
         """
-        self._nn_state[0,self.row_ofs:self.rows+self.row_ofs,:self.cols] = (self.board == 1).astype(int)
-        self._nn_state[1,self.row_ofs:self.rows+self.row_ofs,:self.cols] = (self.board == 2).astype(int)
-        # find the lowest empty row in each column
-        self._nn_state[2,:,:] = 0
-        for c in range(self.cols):
-            r = self.rows - 1
-            while r >= 0 and self.board[r,c] != 0:
-                r -= 1
-            if r >= 0:
-                self._nn_state[2,self.row_ofs + r,self.col_ofs + c] = 1
-        self._nn_state[3,:,:] = 1 if self.current_player == Player.ONE else -1
+        _jit_update_nn_state(self.board, self._nn_state, self.rows, self.cols,
+                            self.row_ofs, self.col_ofs, self.current_player.value)
         return self._nn_state
 
     def get_board(self) -> List[List[int]]:
@@ -120,11 +266,8 @@ class Connect4:
         if self.game_state != GameState.IN_PROGRESS:
             return []
         
-        valid_moves = []
-        for col in range(self.cols):
-            if self.board[0, col] == 0:  # Top row is empty
-                valid_moves.append(col)
-        return valid_moves
+        valid_moves_array = _jit_get_valid_moves(self.board, self.cols)
+        return valid_moves_array.tolist()
     
     def is_valid_move(self, col: int) -> bool:
         """
@@ -138,9 +281,7 @@ class Connect4:
         """
         if self.game_state != GameState.IN_PROGRESS:
             return False
-        if col < 0 or col >= self.cols:
-            return False
-        return bool(self.board[0, col] == 0)
+        return _jit_is_valid_move(self.board, col, self.cols)
     
     def make_move(self, col: int) -> bool:
         """
@@ -155,11 +296,10 @@ class Connect4:
         if not self.is_valid_move(col):
             return False
         
-        # Find the lowest empty row in the column
-        for row in range(self.rows - 1, -1, -1):
-            if self.board[row, col] == 0:
-                self.board[row, col] = self.current_player.value
-                break
+        # Use JIT-compiled function to make the move
+        row = _jit_make_move(self.board, col, self.current_player.value, self.rows)
+        if row == -1:
+            return False
         
         # Check for win or draw
         self._update_game_state(row, col)
@@ -201,37 +341,8 @@ class Connect4:
         Returns:
             bool: True if the current player has won, False otherwise
         """
-        player_value = self.current_player.value
-        
-        # Check all four directions: horizontal, vertical, diagonal
-        directions = [
-            (0, 1),   # Horizontal
-            (1, 0),   # Vertical
-            (1, 1),   # Diagonal /
-            (1, -1),  # Diagonal \
-        ]
-        
-        for dr, dc in directions:
-            count = 1  # Count the piece just placed
-            
-            # Check in positive direction
-            r, c = row + dr, col + dc
-            while (0 <= r < self.rows and 0 <= c < self.cols and 
-                   self.board[r, c] == player_value):
-                count += 1
-                r, c = r + dr, c + dc
-            
-            # Check in negative direction
-            r, c = row - dr, col - dc
-            while (0 <= r < self.rows and 0 <= c < self.cols and 
-                   self.board[r, c] == player_value):
-                count += 1
-                r, c = r - dr, c - dc
-            
-            if count >= self.connect_length:
-                return True
-        
-        return False
+        return _jit_check_win(self.board, row, col, self.current_player.value,
+                             self.connect_length, self.rows, self.cols)
     
     def get_winner(self) -> Optional[Player]:
         """
@@ -260,6 +371,15 @@ class Connect4:
         self.board = np.zeros((self.rows, self.cols), dtype=int)
         self.current_player = Player.ONE
         self.game_state = GameState.IN_PROGRESS
+    
+    def is_jit_enabled(self) -> bool:
+        """
+        Check if JIT compilation is enabled.
+        
+        Returns:
+            bool: True if Numba JIT is available and enabled, False otherwise
+        """
+        return self._jit_enabled
     
     def __str__(self) -> str:
         """
